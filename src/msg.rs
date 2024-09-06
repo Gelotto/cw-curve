@@ -1,6 +1,6 @@
 use cosmwasm_schema::{cw_serde, QueryResponses};
 
-use crate::state::models::Config;
+use crate::models::config::Config;
 
 #[cw_serde]
 pub struct InstantiateMsg {}

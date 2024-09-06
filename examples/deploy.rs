@@ -1,7 +1,7 @@
 use anybuf::Anybuf;
 use contract::{
+    models::config::Config,
     msg::{InstantiateMsg, MigrateMsg},
-    state::models::Config,
     Contract, ContractExecuteMsgFns, ContractQueryMsgFns,
 };
 use cosmos_sdk_proto::Any;

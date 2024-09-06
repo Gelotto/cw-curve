@@ -1,12 +1,17 @@
 #[cfg(not(feature = "library"))]
 pub mod contract;
+pub mod curve;
 pub mod error;
 #[cfg(not(feature = "library"))]
 pub mod execute;
+mod math;
+pub mod models;
 pub mod msg;
 #[cfg(not(feature = "library"))]
 pub mod query;
 pub mod state;
+pub mod token;
+mod utils;
 
 #[cfg(not(target_arch = "wasm32"))]
 mod interface;

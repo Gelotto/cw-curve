@@ -32,3 +32,6 @@ pub fn init(
 ) -> Result<Response, ContractError> {
     Ok(Response::new().add_attribute("action", "instantiate"))
 }
+
+// TODO: Add total cost factor for PnL calculation
+// TODO: impl state::init

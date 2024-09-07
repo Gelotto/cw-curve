@@ -19,6 +19,7 @@ impl Curve {
     pub fn buy(
         &mut self,
         in_amount: Uint128,
+        min_amount_out: Option<Uint128>,
     ) -> Result<Uint128, ContractError> {
         let (new_quote_reserve, new_base_reserve, out_amount) = {
             let new_quote_reserve = add_u128(self.quote_reserve, in_amount)?;
@@ -26,14 +27,24 @@ impl Curve {
             let out_amount = sub_u128(self.base_reserve, new_base_reserve)?;
             (new_quote_reserve, new_base_reserve, out_amount)
         };
+
         self.base_reserve = new_base_reserve;
         self.quote_reserve = new_quote_reserve;
+
+        // Enforce slippage protection
+        if let Some(min_amount_out) = min_amount_out {
+            if out_amount < min_amount_out {
+                return Err(ContractError::TooMuchSlippage {});
+            }
+        }
+
         Ok(out_amount)
     }
 
     pub fn sell(
         &mut self,
         in_amount: Uint128,
+        min_amount_out: Option<Uint128>,
     ) -> Result<Uint128, ContractError> {
         let (new_quote_reserve, new_base_reserve, out_amount) = {
             let new_base_reserve = add_u128(self.base_reserve, in_amount)?;
@@ -41,17 +52,57 @@ impl Curve {
             let out_amount = sub_u128(self.quote_reserve, new_quote_reserve)?;
             (new_quote_reserve, new_base_reserve, out_amount)
         };
+
         self.base_reserve = new_base_reserve;
         self.quote_reserve = new_quote_reserve;
+
+        // Enforce slippage protection
+        if let Some(min_amount_out) = min_amount_out {
+            if out_amount < min_amount_out {
+                return Err(ContractError::TooMuchSlippage {});
+            }
+        }
+
         Ok(out_amount)
     }
 
     /// Calculates BASE price with respect to QUOTE
-    pub fn calculate_spot_price(&self) -> Result<Uint128, ContractError> {
+    pub fn calculate_quote_price(&self) -> Result<Uint128, ContractError> {
         mul_ratio_u128(
             self.quote_reserve,
             10u128.pow(self.quote_decimals as u32),
             self.base_reserve,
+        )
+    }
+
+    pub fn to_base_amount(
+        &self,
+        quote_amount: Uint128,
+    ) -> Result<Uint128, ContractError> {
+        mul_ratio_u128(
+            quote_amount,
+            10u128.pow(self.quote_decimals as u32),
+            self.calculate_base_price()?,
+        )
+    }
+
+    pub fn to_quote_amount(
+        &self,
+        base_amount: Uint128,
+    ) -> Result<Uint128, ContractError> {
+        mul_ratio_u128(
+            base_amount,
+            10u128.pow(self.base_decimals as u32),
+            self.calculate_quote_price()?,
+        )
+    }
+
+    /// Calculates QUOTE price with respect to BASE
+    pub fn calculate_base_price(&self) -> Result<Uint128, ContractError> {
+        mul_ratio_u128(
+            self.base_reserve,
+            10u128.pow(self.quote_decimals as u32),
+            self.quote_reserve,
         )
     }
 }

@@ -1,7 +1,7 @@
 use cosmwasm_schema::cw_serde;
 use cosmwasm_std::{
-    to_json_binary, Addr, BankMsg, Coin, CosmosMsg, Empty, QuerierWrapper, StdError, StdResult,
-    SubMsg, Uint128, Uint64, WasmMsg,
+    to_json_binary, Addr, BankMsg, Coin, CosmosMsg, Empty, QuerierWrapper, StdError, StdResult, SubMsg, Uint128,
+    Uint64, WasmMsg,
 };
 use cw20::{BalanceResponse, Cw20ExecuteMsg, Cw20QueryMsg};
 
@@ -94,23 +94,18 @@ impl Token {
         })
     }
 
-    pub fn has_in_funds(
+    pub fn find_in_funds(
         &self,
         funds_to_search: &Vec<Coin>,
         exact_amount: Option<Uint128>,
-    ) -> bool {
+    ) -> Option<Coin> {
         if let Self::Denom(denom) = self {
             funds_to_search
                 .iter()
-                .find(|c| {
-                    c.denom == *denom
-                        && (exact_amount
-                            .and_then(|n| Some(n == c.amount))
-                            .unwrap_or(true))
-                })
-                .is_some()
+                .find(|c| c.denom == *denom && (exact_amount.and_then(|n| Some(n == c.amount)).unwrap_or(true)))
+                .cloned()
         } else {
-            false
+            None
         }
     }
 }

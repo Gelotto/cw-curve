@@ -1,4 +1,5 @@
 use crate::error::ContractError;
+use crate::execute::buy_sell::{exec_buy, exec_sell};
 use crate::execute::{set_config::exec_set_config, Context};
 use crate::msg::{ExecuteMsg, InstantiateMsg, MigrateMsg, QueryMsg};
 use crate::query::{config::query_config, ReadonlyContext};
@@ -31,6 +32,8 @@ pub fn execute(
     let ctx = Context { deps, env, info };
     match msg {
         ExecuteMsg::SetConfig(config) => exec_set_config(ctx, config),
+        ExecuteMsg::Buy(msg) => exec_buy(ctx, msg),
+        ExecuteMsg::Sell(msg) => exec_sell(ctx, msg),
     }
 }
 

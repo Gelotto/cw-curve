@@ -5,8 +5,8 @@ use super::Context;
 
 pub fn exec_set_config(
     ctx: Context,
-    config: Config,
+    _config: Config,
 ) -> Result<Response, ContractError> {
-    let Context { deps, .. } = ctx;
+    let Context { .. } = ctx;
     Ok(Response::new().add_attributes(vec![attr("action", "set_config")]))
 }

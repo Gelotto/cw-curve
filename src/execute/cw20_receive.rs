@@ -1,7 +1,7 @@
 use crate::{
     error::ContractError,
     msg::Cw20ReceiveInnerMsg,
-    state::{BASE_TOKEN, CURVE, OPERATOR_ADDR, QUOTE_TOKEN},
+    state::{BASE_TOKEN, OPERATOR_ADDR, QUOTE_TOKEN},
     token::Token,
 };
 use cosmwasm_std::{ensure_eq, from_json, Addr, Response};

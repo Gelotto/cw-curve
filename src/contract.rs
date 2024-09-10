@@ -1,5 +1,5 @@
 use crate::error::ContractError;
-use crate::execute::buy_sell::{exec_buy, exec_sell};
+use crate::execute::buy_sell::exec_buy;
 use crate::execute::cw20_receive::exec_cw20_receive;
 use crate::execute::on_balance_change::exec_on_balance_change;
 use crate::execute::{set_config::exec_set_config, Context};

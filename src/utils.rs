@@ -11,9 +11,21 @@ pub fn resolve_swap_initiator(
     store: &dyn Storage,
     api: &dyn Api,
     sender: &Addr,
+    is_cw20: bool,
     maybe_initiator: Option<Addr>,
     action: &str,
 ) -> Result<Addr, ContractError> {
+    if is_cw20 {
+        if let Some(initiator) = maybe_initiator {
+            return Ok(api.addr_validate(initiator.as_str())?);
+        } else {
+            return Err(ContractError::NotAuthorized {
+                reason: "swap initiator is not defined".to_owned(),
+            });
+        }
+    }
+
+    // For native tokens:
     if let Some(operator_addr) = OPERATOR_ADDR.may_load(store)? {
         if *sender != operator_addr {
             return Err(ContractError::NotAuthorized {

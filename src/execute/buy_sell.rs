@@ -1,11 +1,14 @@
-use cosmwasm_std::{attr, Coin, Response, Storage, SubMsg, Uint128};
+use cosmwasm_std::{attr, Response, Storage, SubMsg, Uint128};
 
 use crate::{
     error::ContractError,
-    math::{add_u32, mul_pct_u128, sub_u128},
-    models::{account::AccountStats, ohlc::OhlcBar},
-    msg::SwapMsg,
-    state::{ACCOUNT_STATS, BASE_TOKEN, BUY_FEE_PCT, CURVE, FEE_RECIPIENT_ADDR, QUOTE_TOKEN, SELL_FEE_PCT},
+    math::{add_u128, add_u32, add_u64, mul_pct_u128, sub_u128},
+    models::{account::MaxSwapInfo, ohlc::OhlcBar},
+    msg::{BuyMsg, SellMsg},
+    state::{
+        ACCOUNT_STATS, BASE_TOKEN, CURVE, FEE_ADDR, FEE_PCT_BUY, FEE_PCT_SELL, MAKER_STATS, NET_MAKER_FEE,
+        NET_TAKER_FEE, QUOTE_TOKEN, TAKER_STATS,
+    },
     token::Token,
     utils::resolve_swap_initiator,
 };
@@ -14,31 +17,40 @@ use super::Context;
 
 pub fn exec_buy(
     ctx: Context,
-    msg: SwapMsg,
+    msg: BuyMsg,
+    amount: Option<Uint128>,
 ) -> Result<Response, ContractError> {
     let Context { deps, info, env } = ctx;
-    let SwapMsg {
-        amount,
+    let BuyMsg {
         initiator,
         min_out_amount,
-        token,
     } = msg;
 
     let mut curve = CURVE.load(deps.storage)?;
     let quote_token = QUOTE_TOKEN.load(deps.storage)?;
+    let base_token = BASE_TOKEN.load(deps.storage)?;
 
-    // Get amount we're trying to swap in
-    let in_amount_pre_fee = if token == quote_token {
+    // Amount we're trying to swap in. If ammount is None, it implies that the
+    // quote token is a native coin in info.funds; otherwise, it's a CW20
+    let in_amount_pre_fee = if let Some(amount) = amount {
         amount
     } else {
-        curve.to_quote_amount(amount)?
+        if let Some(coin) = quote_token.find_in_funds(&info.funds, None) {
+            coin.amount
+        } else {
+            return Err(ContractError::MissingFunds {
+                denom: quote_token.get_denom().unwrap(),
+            });
+        }
     };
 
-    // Ensure payment
-    ensure_payment_in_funds(&info.funds, &quote_token, &token, in_amount_pre_fee)?;
-
     // Compute buy or sell-side platform fee
-    let fee_amount = mul_pct_u128(in_amount_pre_fee, BUY_FEE_PCT.load(deps.storage)?)?;
+    let fee_amount = mul_pct_u128(in_amount_pre_fee, FEE_PCT_BUY.load(deps.storage)?)?;
+
+    // Increment total historical aggregate fee amount
+    NET_TAKER_FEE.update(deps.storage, |n| -> Result<_, ContractError> {
+        add_u128(n, fee_amount)
+    })?;
 
     // Subtract fee from amount recieved by sender
     let in_amount = sub_u128(in_amount_pre_fee, fee_amount)?;
@@ -48,12 +60,27 @@ pub fn exec_buy(
 
     // Get initiator. The initiator is either the user performing the tx or the
     // user on whose behalf the operator is performing it.
-    let initiator = resolve_swap_initiator(deps.storage, deps.api, &info.sender, initiator, "buy")?;
+    let initiator = resolve_swap_initiator(deps.storage, deps.api, &info.sender, amount.is_some(), initiator, "buy")?;
 
     // Update initiator's account info
     ACCOUNT_STATS.update(deps.storage, &initiator, |maybe_stats| -> Result<_, ContractError> {
-        let mut stats = maybe_stats.unwrap_or_else(|| AccountStats { n_buys: 0, n_sells: 0 });
+        let mut stats = maybe_stats.unwrap_or_default();
         stats.n_buys = add_u32(stats.n_buys, 1)?;
+        stats.net_quote_in = add_u128(stats.net_quote_in, in_amount)?;
+        stats.net_base_out = add_u128(stats.net_base_out, out_amount)?;
+        Ok(stats)
+    })?;
+
+    // Update global stats
+    TAKER_STATS.update(deps.storage, |mut stats| -> Result<_, ContractError> {
+        stats.n = add_u64(stats.n, 1u64)?;
+        if stats.max.is_none() || stats.max.clone().and_then(|m| Some(out_amount > m.amount)).unwrap() {
+            stats.max = Some(MaxSwapInfo {
+                amount: out_amount,
+                initiator: initiator.to_owned(),
+                time: env.block.time,
+            })
+        }
         Ok(stats)
     })?;
 
@@ -77,52 +104,64 @@ pub fn exec_buy(
         resp = resp.add_submessage(submg);
     }
 
-    Ok(resp)
+    // Add submsg to send purchased base tokens to initiator
+    Ok(resp.add_submessage(base_token.transfer(&initiator, out_amount)?))
 }
 
 pub fn exec_sell(
     ctx: Context,
-    msg: SwapMsg,
+    msg: SellMsg,
+    amount: Uint128,
 ) -> Result<Response, ContractError> {
     let Context { deps, info, env } = ctx;
-    let SwapMsg {
-        amount,
+    let SellMsg {
         initiator,
         min_out_amount,
-        token,
     } = msg;
 
     let mut curve = CURVE.load(deps.storage)?;
     let quote_token = QUOTE_TOKEN.load(deps.storage)?;
-    let base_token = BASE_TOKEN.load(deps.storage)?;
 
     // Get amount to swap in
-    let in_amount = if token == quote_token {
-        curve.to_base_amount(amount)?
-    } else {
-        amount
-    };
-
-    // Ensure payment
-    ensure_payment_in_funds(&info.funds, &base_token, &token, in_amount)?;
+    let in_amount = amount;
 
     // Perform CP AMM swap
     let out_amount_pre_fee = curve.sell(in_amount, min_out_amount)?;
 
     // Compute sell-side platform fee
-    let fee_amount = mul_pct_u128(out_amount_pre_fee, SELL_FEE_PCT.load(deps.storage)?)?;
+    let fee_amount = mul_pct_u128(out_amount_pre_fee, FEE_PCT_SELL.load(deps.storage)?)?;
+
+    // Increment total historical aggregate fee amount
+    NET_MAKER_FEE.update(deps.storage, |n| -> Result<_, ContractError> {
+        add_u128(n, fee_amount)
+    })?;
 
     // Subtract fee from amount recieved by sender
     let out_amount = sub_u128(out_amount_pre_fee, fee_amount)?;
 
     // Get initiator. The initiator is either the user performing the tx or user
     // on whose behalf the operator is performing it.
-    let initiator = resolve_swap_initiator(deps.storage, deps.api, &info.sender, initiator, "sell")?;
+    let initiator = resolve_swap_initiator(deps.storage, deps.api, &info.sender, true, initiator, "sell")?;
 
     // Update initiator's account info
     ACCOUNT_STATS.update(deps.storage, &initiator, |maybe_stats| -> Result<_, ContractError> {
-        let mut stats = maybe_stats.unwrap_or_else(|| AccountStats { n_buys: 0, n_sells: 0 });
+        let mut stats = maybe_stats.unwrap_or_default();
         stats.n_sells = add_u32(stats.n_sells, 1)?;
+        stats.net_base_in = add_u128(stats.net_base_in, in_amount)?;
+        stats.net_quote_out = add_u128(stats.net_quote_out, out_amount)?;
+        Ok(stats)
+    })?;
+
+    // Update global stats
+    MAKER_STATS.update(deps.storage, |mut stats| -> Result<_, ContractError> {
+        stats.n = add_u64(stats.n, 1u64)?;
+        if stats.max.is_none() || stats.max.clone().and_then(|m| Some(in_amount > m.amount)).unwrap() {
+            stats.max = Some(MaxSwapInfo {
+                amount: in_amount,
+                initiator: initiator.to_owned(),
+                time: env.block.time,
+            })
+        }
         Ok(stats)
     })?;
 
@@ -146,7 +185,8 @@ pub fn exec_sell(
         resp = resp.add_submessage(submg);
     }
 
-    Ok(resp)
+    // Add submsg to send purchased quote tokens to initiator
+    Ok(resp.add_submessage(quote_token.transfer(&initiator, out_amount)?))
 }
 
 fn build_fee_transfer_submsg(
@@ -155,39 +195,8 @@ fn build_fee_transfer_submsg(
     fee_amount: Uint128,
 ) -> Result<Option<SubMsg>, ContractError> {
     if !fee_amount.is_zero() {
-        let fee_recipient = FEE_RECIPIENT_ADDR.load(store)?;
+        let fee_recipient = FEE_ADDR.load(store)?;
         return Ok(Some(quote_token.transfer(&fee_recipient, fee_amount)?));
     }
     Ok(None)
-}
-
-fn ensure_payment_in_funds(
-    funds: &Vec<Coin>,
-    exp_token: &Token,
-    in_token: &Token,
-    exp_amount: Uint128,
-) -> Result<(), ContractError> {
-    if let Token::Denom(denom) = in_token {
-        if let Some(coin) = exp_token.find_in_funds(&funds, None) {
-            if coin.amount != exp_amount {
-                return Err(ContractError::InsufficientFunds {
-                    exp_amount: exp_amount.into(),
-                    amount: coin.amount.into(),
-                    denom: denom.to_owned(),
-                });
-            }
-        } else {
-            return Err(ContractError::InsufficientFunds {
-                exp_amount: exp_amount.into(),
-                amount: 0,
-                denom: denom.to_owned(),
-            });
-        }
-    } else {
-        // NOTE: If the base token is a CW20, then we assume that payment has
-        // been validated by the caller, specifically in the Cw20Receiver
-        // interface. Hence, we do nothing here in this case.
-    }
-
-    Ok(())
 }

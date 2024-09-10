@@ -6,12 +6,15 @@ pub enum ContractError {
     #[error("{0}")]
     Std(#[from] StdError),
 
-    #[error("InsufficientFunds: Expected {exp_amount}{denom} but got {amount}{denom}")]
+    #[error("InsufficientFunds: Expected {exp_amount} {denom} but got {amount}")]
     InsufficientFunds {
         denom: String,
         amount: u128,
         exp_amount: u128,
     },
+
+    #[error("MissingFunds: Expected {denom} in funds")]
+    MissingFunds { denom: String },
 
     #[error("NotAuthorized: {reason:?}")]
     NotAuthorized { reason: String },
